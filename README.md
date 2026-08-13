@@ -178,17 +178,196 @@ https://engineeringxpert.com/wp-content/uploads/2022/04/26.png
 ![image](https://user-images.githubusercontent.com/36288975/233856904-99eb708a-c907-4595-9025-c9dbd89b8879.png)
 
 ## CIRCUIT DIAGRAM 
- 
+
+<img width="1918" height="1142" alt="Screenshot 2026-07-24 110738" src="https://github.com/user-attachments/assets/9b35ea97-ce31-4931-a5ef-260111ef2534" />
 
 ## STM 32 CUBE PROGRAM :
+```
+#include <stdint.h>
 
+// --- Register Memory Map Addresses for STM32F401 ---
+#define RCC_BASE        0x40023800
+#define GPIOA_BASE      0x40020000
+#define GPIOB_BASE      0x40020400
+#define GPIOC_BASE      0x40020800
 
+// RCC Register
+#define RCC_AHB1ENR     (*(volatile uint32_t *)(RCC_BASE + 0x30))
+
+// GPIO Registers (GPIOA, GPIOB, GPIOC)
+#define GPIOA_MODER     (*(volatile uint32_t *)(GPIOA_BASE + 0x00))
+#define GPIOA_BSRR      (*(volatile uint32_t *)(GPIOA_BASE + 0x18))
+
+#define GPIOB_MODER     (*(volatile uint32_t *)(GPIOB_BASE + 0x00))
+#define GPIOB_BSRR      (*(volatile uint32_t *)(GPIOB_BASE + 0x18))
+
+#define GPIOC_MODER     (*(volatile uint32_t *)(GPIOC_BASE + 0x00))
+#define GPIOC_PUPDR     (*(volatile uint32_t *)(GPIOC_BASE + 0x0C))
+#define GPIOC_IDR       (*(volatile uint32_t *)(GPIOC_BASE + 0x10))
+#define GPIOC_BSRR      (*(volatile uint32_t *)(GPIOC_BASE + 0x18))
+
+// Inline Assembly NOP
+#define NOP()           __asm__ volatile ("nop")
+
+// --- Microsecond Delay ---
+void delay_us(uint32_t us) {
+    uint32_t count = us * 16; // Approx delay loops for 16MHz default clock
+    while(count--) {
+        NOP();
+    }
+}
+
+// --- Millisecond Delay ---
+void delay_ms(uint32_t ms) {
+    while(ms--) {
+        delay_us(1000);
+    }
+}
+
+// --- Configure GPIO Pins for LCD & Keypad ---
+void GPIO_Init(void) {
+    // 1. Enable Clock for GPIOA (Bit 0), GPIOB (Bit 1), and GPIOC (Bit 2)
+    RCC_AHB1ENR |= (1 << 0) | (1 << 1) | (1 << 2);
+
+    // 2. Set PA0, PA1, PA2, PA3 (LCD Data D7-D4) as Outputs (Mode 01)
+    GPIOA_MODER &= ~((3 << 0) | (3 << 2) | (3 << 4) | (3 << 6));
+    GPIOA_MODER |=  ((1 << 0) | (1 << 2) | (1 << 4) | (1 << 6));
+
+    // 3. Set PB0 (RS), PB1 (E) as Outputs (Mode 01)
+    GPIOB_MODER &= ~((3 << 0) | (3 << 2));
+    GPIOB_MODER |=  ((1 << 0) | (1 << 2));
+
+    // 4. Set PC0, PC1, PC2, PC3 (Keypad Rows A-D) as Outputs (Mode 01)
+    GPIOC_MODER &= ~((3 << 0) | (3 << 2) | (3 << 4) | (3 << 6));
+    GPIOC_MODER |=  ((1 << 0) | (1 << 2) | (1 << 4) | (1 << 6));
+
+    // 5. Set PC4, PC5, PC6, PC7 (Keypad Cols 1-4) as Inputs (Mode 00)
+    GPIOC_MODER &= ~((3 << 8) | (3 << 10) | (3 << 12) | (3 << 14));
+
+    // 6. Configure Internal Pull-Up Resistors for PC4-PC7 (PUPDR Mode 01)
+    GPIOC_PUPDR &= ~((3 << 8) | (3 << 10) | (3 << 12) | (3 << 14));
+    GPIOC_PUPDR |=  ((1 << 8) | (1 << 10) | (1 << 12) | (1 << 14));
+
+    // Set all Keypad Rows HIGH initially
+    GPIOC_BSRR = (1 << 0) | (1 << 1) | (1 << 2) | (1 << 3);
+}
+
+// --- Send Nibble to LCD ---
+void LCD_SendNibble(uint8_t nibble) {
+    if (nibble & 0x01) GPIOA_BSRR = (1 << 3); // D4 -> PA3
+    else               GPIOA_BSRR = (1 << 19);
+
+    if (nibble & 0x02) GPIOA_BSRR = (1 << 2); // D5 -> PA2
+    else               GPIOA_BSRR = (1 << 18);
+
+    if (nibble & 0x04) GPIOA_BSRR = (1 << 1); // D6 -> PA1
+    else               GPIOA_BSRR = (1 << 17);
+
+    if (nibble & 0x08) GPIOA_BSRR = (1 << 0); // D7 -> PA0
+    else               GPIOA_BSRR = (1 << 16);
+
+    GPIOB_BSRR = (1 << 1);   // PB1 (E) HIGH
+    delay_us(10);
+    GPIOB_BSRR = (1 << 17);  // PB1 (E) LOW
+    delay_us(100);
+}
+
+// --- Send Command or Data Byte ---
+void LCD_SendByte(uint8_t value, uint8_t isData) {
+    if (isData) GPIOB_BSRR = (1 << 0);  // PB0 (RS) HIGH
+    else        GPIOB_BSRR = (1 << 16); // PB0 (RS) LOW
+
+    LCD_SendNibble(value >> 4);
+    LCD_SendNibble(value & 0x0F);
+
+    delay_ms(2);
+}
+
+// --- Initialize LCD in 4-Bit Mode ---
+void LCD_Init(void) {
+    delay_ms(50);
+
+    GPIOB_BSRR = (1 << 16); // RS = 0
+    LCD_SendNibble(0x03);
+    delay_ms(5);
+    LCD_SendNibble(0x03);
+    delay_ms(1);
+    LCD_SendNibble(0x03);
+    delay_ms(1);
+    LCD_SendNibble(0x02);
+    delay_ms(1);
+
+    LCD_SendByte(0x28, 0); // 4-bit mode, 2 lines, 5x8 font
+    LCD_SendByte(0x0C, 0); // Display ON, Cursor OFF
+    LCD_SendByte(0x01, 0); // Clear Display
+    delay_ms(2);
+    LCD_SendByte(0x06, 0); // Entry mode set
+}
+
+// --- Send Text String ---
+void LCD_SendString(char *str) {
+    while (*str) {
+        LCD_SendByte(*str++, 1);
+    }
+}
+
+// --- Keypad Key Map matching the Proteus Calculator Layout ---
+const char keypad_map[4][4] = {
+    {'7', '8', '9', '/'},
+    {'4', '5', '6', 'X'},
+    {'1', '2', '3', '-'},
+    {'C', '0', '=', '+'}
+};
+
+// --- Keypad Scan Function ---
+char Keypad_GetKey(void) {
+    for (int r = 0; r < 4; r++) {
+        // 1. Set all rows (PC0-PC3) HIGH
+        GPIOC_BSRR = (1 << 0) | (1 << 1) | (1 << 2) | (1 << 3);
+
+        // 2. Drive the current row LOW
+        GPIOC_BSRR = (1 << (r + 16));
+
+        delay_us(10); // Short settling delay
+
+        // 3. Read columns (PC4 to PC7)
+        uint32_t cols = (GPIOC_IDR >> 4) & 0x0F;
+
+        // 4. Check if any column is pulled LOW (active keypress)
+        if ((cols & 0x01) == 0) { while (((GPIOC_IDR >> 4) & 0x0F) == cols); return keypad_map[r][0]; } // Col 1
+        if ((cols & 0x02) == 0) { while (((GPIOC_IDR >> 4) & 0x0F) == cols); return keypad_map[r][1]; } // Col 2
+        if ((cols & 0x04) == 0) { while (((GPIOC_IDR >> 4) & 0x0F) == cols); return keypad_map[r][2]; } // Col 3
+        if ((cols & 0x08) == 0) { while (((GPIOC_IDR >> 4) & 0x0F) == cols); return keypad_map[r][3]; } // Col 4
+    }
+    return 0; // Return 0 if no key is pressed
+}
+
+int main(void) {
+    GPIO_Init();
+    LCD_Init();
+
+    LCD_SendString("Key Pressed:");
+    LCD_SendByte(0xC0, 0); // Move cursor to Line 2
+
+    char key;
+    while (1) {
+        key = Keypad_GetKey();
+        if (key != 0) {
+            if (key == 'C') {
+                LCD_SendByte(0x01, 0); // Clear Screen on 'ON/C' button press
+                delay_ms(2);
+                LCD_SendString("Key Pressed:");
+                LCD_SendByte(0xC0, 0);
+            } else {
+                LCD_SendByte(key, 1); // Display pressed key character
+            }
+        }
+    }
+}
+```
 
 ## Output screen shots of proteus  :
- 
- 
- ## CIRCUIT DIAGRAM (EXPORT THE GRAPHICS TO PDF AND ADD THE SCREEN SHOT HERE): 
- 
+<img width="1918" height="1140" alt="Screenshot 2026-07-24 110724" src="https://github.com/user-attachments/assets/708e9a76-c8aa-404f-b14f-92ea2e342977" />
  
 ## Result :
 Interfacing a 4x4 keypad with ARM microcontroller are simulated in proteus and the results are verified.
